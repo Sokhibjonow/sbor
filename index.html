@@ -85,6 +85,8 @@
   .row.paid .chip{background:var(--green-soft);border-color:var(--green-soft);color:var(--green)}
   .row.unpaid .amt{color:var(--amber)}
   .row.unpaid .who .name{color:var(--amber)}
+  .del{flex-shrink:0;width:30px;height:30px;border:none;background:none;color:#CBCBC5;font-size:14px;cursor:pointer;border-radius:8px;line-height:1}
+  .del:active{background:#F7ECE8;color:var(--amber)}
 
   .notes{background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:14px 16px;margin-top:8px}
   .notes textarea{width:100%;border:none;outline:none;resize:none;font-family:var(--sans);font-size:14px;color:var(--ink);line-height:1.6;background:transparent;min-height:84px}
@@ -109,6 +111,10 @@
   .field input{width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-family:var(--sans);font-size:16px;background:#fff;color:var(--ink);outline:none}
   .field input:focus{border-color:var(--green)}
   .field input.mono{font-family:var(--mono)}
+  .quickrow{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .qchip{border:1.5px solid var(--green-soft);background:var(--green-soft);color:var(--green);font-family:var(--sans);font-size:13px;font-weight:700;padding:7px 12px;border-radius:999px;cursor:pointer}
+  .qchip:active{filter:brightness(.96)}
+  .qeq{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--muted)}
   .toggle{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;cursor:pointer}
   .toggle.on{border-color:var(--green);background:var(--green-soft)}
   .toggle .t-lbl{font-weight:600;font-size:15px}
@@ -135,6 +141,16 @@
   .bitem .iconbtn:active{background:#F2F1EC}
   .newboard{width:100%;margin-top:4px;padding:14px;border:1.5px dashed var(--line);border-radius:12px;background:none;color:var(--green);font-family:var(--sans);font-weight:600;font-size:15px;cursor:pointer}
   .newboard:active{background:var(--green-soft)}
+  .cscrim{position:fixed;inset:0;background:rgba(20,25,20,.45);opacity:0;pointer-events:none;transition:opacity .18s;z-index:40}
+  .cscrim.open{opacity:1;pointer-events:auto}
+  .confirm{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%) scale(.96);z-index:41;background:#fff;border-radius:18px;padding:20px 18px 16px;width:min(320px,86vw);box-shadow:0 20px 50px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
+  .confirm.open{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+  .confirm .c-msg{font-size:16px;font-weight:600;text-align:center;margin-bottom:16px;line-height:1.4}
+  .confirm .c-actions{display:flex;gap:10px}
+  .confirm .c-actions button{flex:1;padding:13px;border-radius:12px;font-family:var(--sans);font-size:15px;font-weight:600;cursor:pointer;border:none}
+  .c-cancel{background:#F0EFEA;color:var(--ink)}
+  .c-ok{background:var(--amber);color:#fff}
+  .c-ok:active{filter:brightness(.94)}
 </style>
 </head>
 <body>
@@ -190,7 +206,15 @@
   <div class="grip"></div>
   <h3 id="sheetTitle">Новый участник</h3>
   <div class="field"><label>Имя</label><input id="fName" type="text" placeholder="Имя" autocomplete="off"></div>
-  <div class="field"><label>Сумма (сум)</label><input id="fAmount" class="mono" type="text" inputmode="numeric" placeholder="1 200 000"></div>
+  <div class="field">
+    <label>Сумма (сум)</label>
+    <input id="fAmount" class="mono" type="text" inputmode="numeric" placeholder="0">
+    <div class="quickrow">
+      <button type="button" class="qchip" data-usd="50">$50</button>
+      <button type="button" class="qchip" data-usd="100">$100</button>
+      <span class="qeq" id="fEq"></span>
+    </div>
+  </div>
   <div class="field"><label>Фунт (необязательно)</label><input id="fFont" class="mono" type="text" inputmode="numeric" placeholder="0"></div>
   <div class="field"><div class="toggle" id="fPaidToggle"><span class="t-lbl">Оплатил</span><span class="switch"><i></i></span></div></div>
   <div class="actions">
@@ -212,10 +236,19 @@
 </div>
 <input type="file" id="restoreFile" accept=".json,application/json" style="display:none">
 
+<div class="cscrim" id="cscrim"></div>
+<div class="confirm" id="confirmBox">
+  <div class="c-msg" id="cMsg">Удалить?</div>
+  <div class="c-actions">
+    <button class="c-cancel" id="cCancel">Отмена</button>
+    <button class="c-ok" id="cOk">Удалить</button>
+  </div>
+</div>
+
 <script>
 "use strict";
 
-const KEY="sbor_v3", PER=1200000;
+const KEY="sbor_v5", DEFAULT_USD=100, FALLBACK_RATE=12024;
 
 /* ---------- storage ---------- */
 async function rawGet(k){
@@ -233,6 +266,9 @@ async function saveState(){
 const fmt=n=>Math.round(n).toLocaleString("ru-RU");
 const fmtUsd=n=>"$"+Math.round(n).toLocaleString("en-US");
 const parseNum=s=>{const v=parseInt(String(s).replace(/[^\d]/g,""),10);return isNaN(v)?0:v;};
+const curRate=()=>state.rate||FALLBACK_RATE;
+const usdToSum=usd=>Math.round(usd*curRate());
+const sumToUsd=sum=>Math.round(sum/curRate());
 const uid=p=>(p||"id")+"_"+Math.random().toString(36).slice(2,8);
 function todayStr(){const d=new Date();return String(d.getDate()).padStart(2,"0")+"."+String(d.getMonth()+1).padStart(2,"0")+"."+d.getFullYear();}
 const MONTHS=["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
@@ -242,8 +278,17 @@ function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"
 function fmtTs(ts){ if(!ts) return ""; const d=new Date(ts),p=n=>String(n).padStart(2,"0"); return p(d.getDate())+"."+p(d.getMonth()+1)+" "+p(d.getHours())+":"+p(d.getMinutes()); }
 
 
+function seedPeople(){
+  return ["Бунёдбек","Достонбек","Зиёйдин","Исройилжон","Мамиржон","Мирзаазиз",
+    "Муроджон","Омаджон","Рахмтилло","Сарварбек","Сардор ака","Турсинбой",
+    "Хамиджон","Хуршидбек","С, Муроджон","Иқбол ака","Асрорбек","Жолол ака",
+    "Сардорбек","Мамиржон 2","Абдурахмон","Абдуқодир","Достонбек 2","Авазбек"]
+    .map(n=>({id:uid("p"),name:n,amount:0,font:0,paid:false}));
+}
+
 let state = {
-  boards:[{ id:uid("b"), title:"Сбор", date:todayStr(), people:[], notes:"" }],
+  boards:[{ id:uid("b"), title:"Мирзаазиз №22", date:"23.06.2026", people:seedPeople(),
+    notes:"" }],
   currentId:null,
   rate:null, rateManual:false, rateSrc:""
 };
@@ -296,13 +341,21 @@ function renderList(){
   board().people.forEach((p,idx)=>{
     const row=document.createElement("div");
     row.className="row "+(p.paid?"paid":"unpaid");
-    const meta=[]; if(p.font) meta.push("фунт "+fmt(p.font)); if(p.ts) meta.push(fmtTs(p.ts));
+    const meta=[]; if(p.amount) meta.push("≈$"+sumToUsd(p.amount)); if(p.font) meta.push("фунт "+fmt(p.font)); if(p.ts) meta.push(fmtTs(p.ts));
     const extra=meta.length?`<div class="extra">${meta.join(" · ")}</div>`:"";
     row.innerHTML=`<div class="num">${idx+1}</div>
       <div class="who"><div class="name">${escapeHtml(p.name)}</div>${extra}</div>
       <div class="amt">${p.amount?fmt(p.amount):"—"}</div>
-      <div class="chip">✓</div>`;
+      <div class="chip">✓</div>
+      <button class="del" aria-label="Удалить">✕</button>`;
     row.querySelector(".chip").addEventListener("click",e=>{e.stopPropagation();togglePaid(p.id);});
+    row.querySelector(".del").addEventListener("click",e=>{
+      e.stopPropagation();
+      askDelete("Удалить участника «"+p.name+"»?",()=>{
+        board().people=board().people.filter(x=>x.id!==p.id);
+        renderAll(); saveState();
+      });
+    });
     row.addEventListener("click",()=>openEditor(p.id));
     list.appendChild(row);
   });
@@ -317,7 +370,7 @@ function renderAll(){ renderHeader(); renderRate(); renderTotals(); renderList()
 /* ---------- participant actions ---------- */
 function togglePaid(id){
   const p=board().people.find(x=>x.id===id); if(!p)return;
-  p.paid=!p.paid; if(p.paid&&!p.amount)p.amount=PER;
+  p.paid=!p.paid; if(p.paid&&!p.amount)p.amount=usdToSum(DEFAULT_USD);
   renderTotals(); renderList(); saveState();
 }
 
@@ -329,6 +382,15 @@ function openSheet(el){ scrim.classList.add("open"); el.classList.add("open"); }
 function closeSheets(){ scrim.classList.remove("open"); sheet.classList.remove("open"); boardSheet.classList.remove("open"); }
 scrim.addEventListener("click",closeSheets);
 
+/* in-app confirmation */
+let _confirmCb=null;
+const cscrim=document.getElementById("cscrim"),confirmBox=document.getElementById("confirmBox"),cMsg=document.getElementById("cMsg");
+function askDelete(msg,cb){ cMsg.textContent=msg; _confirmCb=cb; cscrim.classList.add("open"); confirmBox.classList.add("open"); }
+function closeConfirm(){ cscrim.classList.remove("open"); confirmBox.classList.remove("open"); _confirmCb=null; }
+document.getElementById("cCancel").addEventListener("click",closeConfirm);
+cscrim.addEventListener("click",closeConfirm);
+document.getElementById("cOk").addEventListener("click",()=>{ const cb=_confirmCb; closeConfirm(); if(cb)cb(); });
+
 /* participant editor */
 let editingId=null, draftPaid=false;
 const fName=document.getElementById("fName"),fAmount=document.getElementById("fAmount"),
@@ -338,25 +400,39 @@ function openEditor(id){
   editingId=id; const isNew=!id;
   document.getElementById("sheetTitle").textContent=isNew?"Новый участник":"Изменить";
   document.getElementById("delBtn").style.display=isNew?"none":"block";
-  if(isNew){ fName.value="";fAmount.value=fmt(PER);fFont.value="";setDraftPaid(true); }
+  if(isNew){ fName.value="";fAmount.value="";fFont.value="";setDraftPaid(false); }
   else{ const p=board().people.find(x=>x.id===id); fName.value=p.name;fAmount.value=p.amount?fmt(p.amount):"";fFont.value=p.font?fmt(p.font):"";setDraftPaid(p.paid); }
+  updateFEq();
   openSheet(sheet);
 }
 paidToggle.addEventListener("click",()=>setDraftPaid(!draftPaid));
 document.getElementById("saveBtn").addEventListener("click",()=>{
   const name=fName.value.trim(); if(!name){fName.focus();return;}
-  const amount=parseNum(fAmount.value),font=parseNum(fFont.value);
+  let amount=parseNum(fAmount.value); const font=parseNum(fFont.value);
+  if(draftPaid && !amount) amount=usdToSum(DEFAULT_USD);
   if(editingId){ const p=board().people.find(x=>x.id===editingId); p.name=name;p.amount=amount;p.font=font;p.paid=draftPaid; }
   else{ board().people.push({id:uid("p"),name,amount,font,paid:draftPaid,ts:Date.now()}); }
   closeSheets(); renderAll(); saveState();
 });
 document.getElementById("delBtn").addEventListener("click",()=>{
   if(!editingId)return;
-  board().people=board().people.filter(x=>x.id!==editingId);
-  closeSheets(); renderAll(); saveState();
+  const p=board().people.find(x=>x.id===editingId), id=editingId;
+  askDelete("Удалить участника"+(p?" «"+p.name+"»":"")+"?",()=>{
+    board().people=board().people.filter(x=>x.id!==id);
+    closeSheets(); renderAll(); saveState();
+  });
 });
 document.getElementById("addBtn").addEventListener("click",()=>openEditor(null));
-[fAmount,fFont].forEach(inp=>inp.addEventListener("input",()=>{const v=parseNum(inp.value);inp.value=v?fmt(v):"";}));
+[fAmount,fFont].forEach(inp=>inp.addEventListener("input",()=>{const v=parseNum(inp.value);inp.value=v?fmt(v):"";updateFEq();}));
+document.querySelectorAll(".qchip").forEach(btn=>btn.addEventListener("click",()=>{
+  const usd=parseFloat(btn.dataset.usd);
+  fAmount.value=fmt(usdToSum(usd));
+  updateFEq();
+}));
+function updateFEq(){
+  const v=parseNum(fAmount.value);
+  document.getElementById("fEq").textContent = v ? ("≈ $"+sumToUsd(v)) : ("1 $ = "+fmt(curRate())+" сум");
+}
 
 /* board switcher */
 function renderBoardList(){
@@ -382,10 +458,11 @@ function renderBoardList(){
     item.querySelector(".act-del").addEventListener("click",e=>{
       e.stopPropagation();
       if(state.boards.length<=1){ alert("Нельзя удалить единственный сбор."); return; }
-      if(!confirm("Удалить сбор «"+b.title+"»?")) return;
-      state.boards=state.boards.filter(x=>x.id!==b.id);
-      if(state.currentId===b.id) state.currentId=state.boards[0].id;
-      renderBoardList(); renderAll(); saveState();
+      askDelete("Удалить сбор «"+b.title+"»?",()=>{
+        state.boards=state.boards.filter(x=>x.id!==b.id);
+        if(state.currentId===b.id) state.currentId=state.boards[0].id;
+        renderBoardList(); renderAll(); saveState();
+      });
     });
     el.appendChild(item);
   });
